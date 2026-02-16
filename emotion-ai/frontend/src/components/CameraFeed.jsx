@@ -1,100 +1,154 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Camera, RefreshCw } from 'lucide-react';
-import { getVideoFeedUrl, getCurrentEmotion, stopCamera } from '../api';
+import * as faceapi from 'face-api.js';
 
 const CameraFeed = ({ onEmotionUpdate, customClass }) => {
-    const [isActive, setIsActive] = useState(false);
-    const [feedUrl, setFeedUrl] = useState('');
-    const [loading, setLoading] = useState(false);
-    const intervalRef = useRef(null);
+    const videoRef = useRef(null);
+    const canvasRef = useRef(null);
+    const [initializing, setInitializing] = useState(false);
+    const [isModelLoaded, setIsModelLoaded] = useState(false);
+    const [error, setError] = useState(null);
 
+    // Load models on mount
     useEffect(() => {
-        if (isActive) {
-            setFeedUrl(getVideoFeedUrl());
-            intervalRef.current = setInterval(async () => {
-                const data = await getCurrentEmotion();
-                if (data && onEmotionUpdate) {
-                    onEmotionUpdate(data);
-                }
-            }, 500);
-        } else {
-            setFeedUrl('');
-            if (intervalRef.current) clearInterval(intervalRef.current);
-            stopCamera();
-        }
-        return () => {
-            if (intervalRef.current) clearInterval(intervalRef.current);
-        };
-    }, [isActive, onEmotionUpdate]);
+        const loadModels = async () => {
+            setInitializing(true);
+            try {
+                // Determine model URL based on environment
+                const MODEL_URL = '/models';
 
-    const toggleCamera = () => {
-        if (isActive) {
-            setIsActive(false);
-        } else {
-            setLoading(true);
-            setTimeout(() => {
-                setIsActive(true);
-                setLoading(false);
-            }, 1000);
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
+                ]);
+                setIsModelLoaded(true);
+                console.log("Models Loaded Successfully");
+            } catch (err) {
+                console.error("Failed to load models:", err);
+                setError("Failed to load AI models. Please refresh.");
+            }
+            setInitializing(false);
+        };
+        loadModels();
+    }, []);
+
+    const startVideo = () => {
+        setInitializing(true);
+        navigator.mediaDevices
+            .getUserMedia({ video: {} })
+            .then((stream) => {
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                }
+                setInitializing(false);
+            })
+            .catch((err) => {
+                console.error("Camera Error:", err);
+                setError("Camera access denied.");
+                setInitializing(false);
+            });
+    };
+
+    const handleVideoPlay = () => {
+        if (!videoRef.current || !canvasRef.current || !isModelLoaded) return;
+
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+
+        // Ensure the video is ready
+        if (video.readyState < 2) {
+            video.addEventListener('loadeddata', handleVideoPlay);
+            return;
         }
+
+        const displaySize = { width: video.videoWidth, height: video.videoHeight };
+        faceapi.matchDimensions(canvas, displaySize);
+
+        const interval = setInterval(async () => {
+            if (video.paused || video.ended) return;
+
+            try {
+                const detections = await faceapi
+                    .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                    .withFaceExpressions();
+
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+
+                // Clear canvas
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Draw detections
+                faceapi.draw.drawDetections(canvas, resizedDetections);
+
+                // Custom drawing for emotions or use default:
+                // faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
+
+                if (detections.length > 0) {
+                    const expressions = detections[0].expressions;
+                    const dominant = Object.keys(expressions).reduce((a, b) =>
+                        expressions[a] > expressions[b] ? a : b
+                    );
+                    const score = expressions[dominant];
+
+                    // Draw custom label
+                    const box = resizedDetections[0].detection.box;
+                    const text = `${dominant} (${(score * 100).toFixed(0)}%)`;
+                    const drawBox = new faceapi.draw.DrawBox(box, { label: text, boxColor: '#ec4899' });
+                    drawBox.draw(canvas);
+
+                    // Callback to parent
+                    if (onEmotionUpdate) {
+                        onEmotionUpdate({
+                            emotion: dominant,
+                            score: score
+                        });
+                    }
+                }
+            } catch (err) {
+                console.error("Detection Error:", err);
+            }
+        }, 100);
+
+        return () => clearInterval(interval);
     };
 
     return (
-        <div className={`flex flex-col items-center w-full h-full transition-all duration-500 ${customClass || ''}`}>
-            <div className="relative w-full h-full bg-gray-900/5 overflow-hidden rounded-3xl flex items-center justify-center border border-white/20 shadow-inner group">
-                {isActive ? (
-                    <img
-                        src={feedUrl}
-                        alt="Live Camera Feed"
-                        className="w-full h-full object-cover"
-                        onError={() => setIsActive(false)}
-                    />
-                ) : (
-                    <div className="flex flex-col items-center justify-center text-gray-400 p-8 text-center">
-                        <div className="w-24 h-24 bg-pink-100/50 backdrop-blur-sm rounded-full flex items-center justify-center mb-6 animate-pulse">
-                            <Camera size={40} className="text-pink-500" />
-                        </div>
-                        <h3 className="text-2xl font-bold text-pink-900/70 mb-2">Camera is Off</h3>
-                        <p className="text-pink-800/40 font-medium">Activate detection to start the magic</p>
-                    </div>
-                )}
+        <div className={`relative w-full h-full overflow-hidden rounded-3xl bg-black ${customClass}`}>
+            {/* Video Element */}
+            <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline // Crucial for mobile
+                onPlay={handleVideoPlay}
+                className="absolute top-0 left-0 w-full h-full object-cover z-10"
+            />
 
-                {/* Floating Controls */}
-                <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <button
-                        onClick={toggleCamera}
-                        className={`
-                            flex items-center gap-3 px-8 py-4 rounded-full font-bold text-white shadow-2xl backdrop-blur-xl transition-all transform hover:scale-105 active:scale-95
-                            ${isActive
-                                ? 'bg-red-500/90 hover:bg-red-600 border border-red-400/50 shadow-red-500/30'
-                                : 'bg-gradient-to-r from-pink-600 to-purple-600 border border-white/30 shadow-purple-500/30'}
-                        `}
-                    >
-                        <Camera size={20} className={isActive ? "animate-pulse" : ""} />
-                        <span>{isActive ? "Stop Stream" : "Start Camera"}</span>
-                    </button>
+            {/* Canvas Overlay */}
+            <canvas
+                ref={canvasRef}
+                className="absolute top-0 left-0 w-full h-full object-cover z-20 pointer-events-none"
+            />
+
+            {/* UI Overlays */}
+            {(!isModelLoaded || initializing) && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-30 text-white">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-pink-500 mb-4"></div>
+                    <p>{!isModelLoaded ? "Loading AI Models..." : "Starting Camera..."}</p>
                 </div>
+            )}
 
-                {/* Always visible toggle hint if inactive */}
-                {!isActive && (
-                    <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-20">
-                        <button
-                            onClick={toggleCamera}
-                            className="flex items-center gap-3 px-8 py-4 rounded-full font-bold text-white shadow-2xl backdrop-blur-xl bg-gradient-to-r from-pink-600 to-purple-600 border border-white/30 shadow-purple-500/30 animate-bounce-subtle"
-                        >
-                            <Camera size={20} />
-                            <span>Start Camera</span>
-                        </button>
-                    </div>
-                )}
-
-                {loading && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/60 backdrop-blur-lg z-30">
-                        <RefreshCw size={40} className="text-pink-600 animate-spin mb-4" />
-                        <span className="text-pink-900 font-bold tracking-widest text-sm uppercase">Initializing AI Module...</span>
-                    </div>
-                )}
-            </div>
+            {!videoRef.current?.srcObject && !initializing && isModelLoaded && (
+                <div className="absolute inset-0 flex items-center justify-center z-30 bg-gray-900/90">
+                    <button
+                        onClick={startVideo}
+                        className="px-8 py-3 bg-gradient-to-r from-pink-500 to-purple-600 rounded-full text-white font-bold shadow-lg hover:scale-105 transition-transform"
+                    >
+                        Start Camera
+                    </button>
+                    {error && <p className="absolute bottom-10 text-red-400">{error}</p>}
+                </div>
+            )}
         </div>
     );
 };
