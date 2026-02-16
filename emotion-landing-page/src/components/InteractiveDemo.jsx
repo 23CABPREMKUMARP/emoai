@@ -1,49 +1,116 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera, RefreshCw, Smile, Meh, Frown, Sparkles, Brain, AlertCircle } from 'lucide-react';
-import { getVideoFeedUrl, getCurrentEmotion, stopCamera } from '../api';
+import { Camera, RefreshCw, Smile, Meh, Frown, AlertCircle } from 'lucide-react';
+import * as faceapi from 'face-api.js';
 
 export default function InteractiveDemo() {
     const [isActive, setIsActive] = useState(false);
     const [currentEmotion, setCurrentEmotion] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [modelLoaded, setModelLoaded] = useState(false);
     const [error, setError] = useState(null);
-    const intervalRef = useRef(null);
 
+    const videoRef = useRef(null);
+    const canvasRef = useRef(null);
+
+    // Initialize Models
     useEffect(() => {
-        if (isActive) {
-            intervalRef.current = setInterval(async () => {
-                try {
-                    const data = await getCurrentEmotion();
-                    if (data) {
-                        setCurrentEmotion(data);
-                    }
-                } catch (err) {
-                    console.error("Failed to fetch emotion", err);
-                }
-            }, 500);
-        } else {
-            if (intervalRef.current) clearInterval(intervalRef.current);
-            setCurrentEmotion(null);
-            stopCamera(); // Ensure hardware is released
-        }
-        return () => {
-            if (intervalRef.current) clearInterval(intervalRef.current);
+        const loadModels = async () => {
+            setLoading(true);
+            try {
+                const MODEL_URL = '/models';
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
+                ]);
+                setModelLoaded(true);
+                setLoading(false);
+            } catch (err) {
+                console.error("Model Load Error:", err);
+                setError("Failed to load AI models");
+                setLoading(false);
+            }
         };
-    }, [isActive]);
+        loadModels();
+    }, []);
+
+    const startCamera = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+            if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+            }
+            setIsActive(true);
+        } catch (err) {
+            console.error(err);
+            setError("Camera access denied");
+        }
+        setLoading(false);
+    };
+
+    const stopCamera = () => {
+        if (videoRef.current && videoRef.current.srcObject) {
+            videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+            videoRef.current.srcObject = null;
+        }
+        setIsActive(false);
+        setCurrentEmotion(null);
+    };
+
+    const handleVideoPlay = () => {
+        if (!videoRef.current || !canvasRef.current || !modelLoaded) return;
+
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+
+        // Wait for dimensions if not ready
+        if (video.videoWidth === 0) {
+            video.addEventListener('loadeddata', handleVideoPlay);
+            return;
+        }
+
+        const displaySize = { width: video.videoWidth, height: video.videoHeight };
+        faceapi.matchDimensions(canvas, displaySize);
+
+        const interval = setInterval(async () => {
+            if (video.paused || video.ended) return;
+
+            try {
+                const detections = await faceapi
+                    .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                    .withFaceExpressions();
+
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Draw detection box
+                faceapi.draw.drawDetections(canvas, resizedDetections);
+
+                if (detections.length > 0) {
+                    const expressions = detections[0].expressions;
+                    const dominant = Object.keys(expressions).reduce((a, b) =>
+                        expressions[a] > expressions[b] ? a : b
+                    );
+
+                    setCurrentEmotion({
+                        emotion: dominant,
+                        score: expressions[dominant]
+                    });
+                }
+            } catch (err) {
+                // ignore frame errors
+            }
+        }, 100);
+
+        return () => clearInterval(interval);
+    };
 
     const toggleCamera = () => {
-        if (isActive) {
-            setIsActive(false);
-        } else {
-            setLoading(true);
-            setError(null);
-            // Small timeout to simulate initialization
-            setTimeout(() => {
-                setIsActive(true);
-                setLoading(false);
-            }, 1000);
-        }
+        if (isActive) stopCamera();
+        else startCamera();
     };
 
     const getEmotionIcon = (emotion) => {
@@ -104,18 +171,22 @@ export default function InteractiveDemo() {
                                         {isActive ? 'LIVE PREVIEW' : 'CAMERA OFF'}
                                     </div>
 
-                                    {isActive ? (
-                                        <div className="w-full h-full relative">
-                                            <img
-                                                src={isActive ? getVideoFeedUrl() : ''}
-                                                alt="Live Stream"
-                                                className="w-full h-full object-cover"
-                                                onError={() => {
-                                                    setError("Could not connect to backend");
-                                                    setIsActive(false);
-                                                }}
-                                            />
+                                    {/* Video & Canvas */}
+                                    <video
+                                        ref={videoRef}
+                                        autoPlay
+                                        muted
+                                        playsInline
+                                        onPlay={handleVideoPlay}
+                                        className={`absolute inset-0 w-full h-full object-cover ${isActive ? '' : 'hidden'}`}
+                                    />
+                                    <canvas
+                                        ref={canvasRef}
+                                        className={`absolute inset-0 w-full h-full object-cover pointer-events-none ${isActive ? '' : 'hidden'}`}
+                                    />
 
+                                    {isActive ? (
+                                        <div className="w-full h-full relative pointer-events-none">
                                             {/* Detection Overlay */}
                                             <AnimatePresence>
                                                 {currentEmotion && (
@@ -123,14 +194,13 @@ export default function InteractiveDemo() {
                                                         initial={{ opacity: 0, scale: 0.8 }}
                                                         animate={{ opacity: 1, scale: 1 }}
                                                         exit={{ opacity: 0 }}
-                                                        className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                                                        className="absolute inset-0 flex items-center justify-center"
                                                     >
-                                                        <div className="relative border-2 border-primary-neon w-48 h-64 rounded-xl">
+                                                        <div className="relative border-2 border-primary-neon/50 w-48 h-64 rounded-xl">
                                                             <div className="absolute -top-10 left-0 bg-primary-neon text-dark px-3 py-1 rounded-md text-sm font-bold flex items-center gap-2 whitespace-nowrap shadow-lg">
                                                                 {getEmotionIcon(currentEmotion.emotion)}
                                                                 {currentEmotion.emotion.toUpperCase()} {(currentEmotion.score * 100).toFixed(0)}%
                                                             </div>
-
                                                             {/* Scanning Line Animation */}
                                                             <motion.div
                                                                 animate={{ top: ['0%', '100%', '0%'] }}
@@ -170,6 +240,7 @@ export default function InteractiveDemo() {
                                     <div className="flex gap-4">
                                         <button
                                             onClick={toggleCamera}
+                                            disabled={loading || (!modelLoaded && !isActive)}
                                             className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold transition-all ${isActive ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-primary-neon text-dark hover:bg-primary-neon/80 hover:shadow-primary-neon/30'}`}
                                         >
                                             {isActive ? <RefreshCw className="w-4 h-4" /> : <Camera className="w-4 h-4" />}
@@ -180,6 +251,7 @@ export default function InteractiveDemo() {
                                         </button>
                                     </div>
                                     <div className="flex -space-x-3">
+                                        {/* Emotion Indicators */}
                                         <div className={`w-10 h-10 rounded-full border-2 border-dark-bg transition-all flex items-center justify-center backdrop-blur-sm ${currentEmotion?.emotion?.toLowerCase() === 'happy' ? 'bg-primary-neon scale-110 z-10' : 'bg-primary-violet/20 grayscale'}`}>
                                             <Smile className="w-5 h-5" />
                                         </div>
