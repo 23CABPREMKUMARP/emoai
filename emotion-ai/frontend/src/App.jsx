@@ -3,28 +3,19 @@ import CameraFeed from './components/CameraFeed'
 import AnalyticsDashboard from './components/AnalyticsDashboard'
 import EmotionDialog from './components/EmotionDialog'
 import TextAnalyzer from './components/TextAnalyzer'
-import { getAnalytics } from './api'
+import useAnalytics from './hooks/useAnalytics' // Import client-side hook
 import './index.css'
 
 function App() {
-  const [analyticsData, setAnalyticsData] = useState(null)
   const [currentEmotion, setCurrentEmotion] = useState(null)
   const [mode, setMode] = useState('video'); // 'video' or 'text'
+
+  // Use client-side analytics instead of fetching from backend
+  const analyticsData = useAnalytics(currentEmotion);
 
   const handleEmotionUpdate = (emotionData) => {
     setCurrentEmotion(emotionData);
   };
-
-
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      const data = await getAnalytics();
-      if (data) {
-        setAnalyticsData(data);
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <div className="h-screen w-full bg-[#fdf2f8] relative overflow-hidden flex flex-col text-slate-800 font-sans">
