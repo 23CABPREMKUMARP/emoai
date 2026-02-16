@@ -1,10 +1,11 @@
 fastapi
 uvicorn
-opencv-python
+opencv-python-headless
 numpy
-tensorflow
-fer
 pandas
 python-multipart
 websockets
-mtcnn
+google-generativeai
+# Note: tensorflow, fer, and mtcnn have been removed to fit within Vercel's serverless function size limits (<250MB).
+# The application will fall back to using Mock Mode for video analysis.
+# For full AI functionality, deploy this backend to a platform like Render or Railway.
