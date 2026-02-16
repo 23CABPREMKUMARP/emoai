@@ -77,9 +77,16 @@ export default function InteractiveDemo() {
         const interval = setInterval(async () => {
             if (video.paused || video.ended) return;
 
+            // OPTIMIZATION: Skip every other frame to reduce CPU load
+            frameCountRef.current++;
+            if (frameCountRef.current % 2 !== 0) return;
+
             try {
+                // OPTIMIZATION: Lower inputSize for speed
+                const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+
                 const detections = await faceapi
-                    .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                    .detectAllFaces(video, options)
                     .withFaceExpressions();
 
                 const resizedDetections = faceapi.resizeResults(detections, displaySize);

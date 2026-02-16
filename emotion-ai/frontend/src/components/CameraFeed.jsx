@@ -67,8 +67,11 @@ const CameraFeed = ({ onEmotionUpdate, customClass }) => {
             if (video.paused || video.ended) return;
 
             try {
+                // OPTIMIZATION: Lower inputSize (160/224) for much faster mobile inference
+                const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+
                 const detections = await faceapi
-                    .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                    .detectAllFaces(video, options)
                     .withFaceExpressions();
 
                 const resizedDetections = faceapi.resizeResults(detections, displaySize);
@@ -98,11 +101,15 @@ const CameraFeed = ({ onEmotionUpdate, customClass }) => {
 
                     const capitalizedEmotion = dominant.charAt(0).toUpperCase() + dominant.slice(1);
 
-                    if (onEmotionUpdate) {
+                    // OPTIMIZATION: Throttle React state updates to prevent UI lag
+                    // Only update Dashboard every 500ms
+                    const now = Date.now();
+                    if (onEmotionUpdate && (now - lastUpdateRef.current > 500)) {
                         onEmotionUpdate({
                             emotion: capitalizedEmotion,
                             score: score
                         });
+                        lastUpdateRef.current = now;
                     }
                 }
             } catch (err) {
