@@ -96,10 +96,11 @@ const CameraFeed = ({ onEmotionUpdate, customClass }) => {
                     const drawBox = new faceapi.draw.DrawBox(box, { label: text, boxColor: '#ec4899' });
                     drawBox.draw(canvas);
 
-                    // Callback to parent
+                    const capitalizedEmotion = dominant.charAt(0).toUpperCase() + dominant.slice(1);
+
                     if (onEmotionUpdate) {
                         onEmotionUpdate({
-                            emotion: dominant,
+                            emotion: capitalizedEmotion,
                             score: score
                         });
                     }

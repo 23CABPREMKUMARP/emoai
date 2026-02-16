@@ -95,8 +95,10 @@ export default function InteractiveDemo() {
                         expressions[a] > expressions[b] ? a : b
                     );
 
+                    const capitalizedEmotion = dominant.charAt(0).toUpperCase() + dominant.slice(1);
+
                     setCurrentEmotion({
-                        emotion: dominant,
+                        emotion: capitalizedEmotion,
                         score: expressions[dominant]
                     });
                 }
